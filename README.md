@@ -1,6 +1,6 @@
 🔗 Прямая ссылка на скачивание
 ----
-> https://github.com/Misha20062006/RatingsParser/releases/download/v1.0.0/RatingsParser.exe
+\> https://github.com/Misha20062006/RatingsParser/releases/download/v1.0.0/RatingsParser.exe
 
 ✅ Парсер рейтингов пользователей Teslacraft
 -------
