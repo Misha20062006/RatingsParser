@@ -70,6 +70,7 @@ async def start_browser(p):
             await test_page.close()
             await context.close()
             logging.exception(f'Не удалось открыть стартовую страницу. Скорее всего, не удалось пройти капчу. Перезапуск браузера. {e}')
+            print('Не удалось открыть стартовую страницу. Скорее всего, не удалось пройти капчу. Перезапуск браузера.')
             await asyncio.sleep(2)
     return context
 
@@ -87,6 +88,7 @@ async def lookup_pages(page, profile_link):
         await page.goto(profile_link, wait_until='domcontentloaded', timeout=1000000)
     except Exception as e:
         logging.exception(f'Ошибка при переходе на страницу: {e}')
+        print('Ошибка при переходе на страницу (скорее всего, не удалось установить соединение, будет необходимо проверить файл last_log.log и вручную внести данные в конечные файлы)')
 
     username_element = await page.query_selector('.username')
     positive_rating_element = await page.query_selector(
@@ -102,6 +104,7 @@ async def lookup_pages(page, profile_link):
         negative_rating = await negative_rating_element.inner_text()
     except Exception as e:
         logging.exception(f'Ошибка, ник не был найден: {e}')
+        print('Ошибка, ник не был найден (скорее всего, пользователь удалён).')
         return None
     return username, positive_rating, neutral_rating, negative_rating
 
@@ -142,7 +145,7 @@ async def main():
             write_to_file_and_print(users_info)
             print(f'Время проверки {WINDOWS_IN_BROWSER} страниц: {time.time() - time_start}')
     create_tops()
-    print(f'Программа закончила работу')
+    print(f'Программа закончила работу.')
     print(f'Все возникшие ошибки, если они были, указаны в файле "last_log.log" ')
     print(f'Время выполнения всей программы: {time.time() - program_start}')
 
@@ -152,4 +155,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as ex:
         logging.exception(f'Ошибка во время выполнения: {ex}')
+        print('Ошибка во время выполнения (подробнее в файле last_log.log).')
     input("\nНажмите Enter, чтобы закрыть...")
