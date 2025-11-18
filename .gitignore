@@ -4,3 +4,7 @@
 __pycache__/
 *.txt
 user-data/
+build
+dist
+*.ico
+*.spec

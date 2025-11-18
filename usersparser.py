@@ -5,29 +5,41 @@ from patchright.async_api import async_playwright
 from sortnames import create_tops
 from datetime import datetime
 
-program_start = time.time()
-print('Программа пройдётся по айди пользователей от старых к новы (от 1 до Вашего числа) и соберёт статистику по рейтингам в файлы .txt')
-print('Введите количество пользователей форума для сбора статистики. Например: 100 (число должно быть больше 0)')
+with open('users.txt', 'w', encoding='utf-8'):
+    pass
 
+program_start = time.time()
+print(
+    'Программа пройдётся по айди пользователей от старых к новым (от 1 до Вашего числа) и соберёт статистику по рейтингам в файлы .txt')
+print('Введите количество пользователей форума для сбора статистики. Например: 100 (число должно быть больше 0)')
 while True:
-    USERS_COUNT = int(input('Количество пользователей: '))
-    if USERS_COUNT <=0:
-        print('Число должно быть больше 0')
+    USERS_COUNT = (input('Количество пользователей: '))
+    if USERS_COUNT.isdigit():
+        USERS_COUNT = int(USERS_COUNT)
+        if USERS_COUNT <= 0:
+            print('Число должно быть больше 0')
+        else:
+            break
     else:
-        break
+        print('Надо ввести положительное число')
 
 print('Укажите количество страниц, которое будет задействовано одновременно при сборе статистики')
 print('Не рекомендуется указывать больше 20')
 while True:
-    WINDOWS_IN_BROWSER = int(input('Количество страниц для одновременной проверки: '))
-    if WINDOWS_IN_BROWSER <=0:
-        print('Число должно быть больше 0')
+    WINDOWS_IN_BROWSER = (input('Количество страниц для одновременной проверки: '))
+    if WINDOWS_IN_BROWSER.isdigit():
+        WINDOWS_IN_BROWSER = int(WINDOWS_IN_BROWSER)
+        if WINDOWS_IN_BROWSER <= 0:
+            print('Число должно быть больше 0')
+        else:
+            break
     else:
-        break
+        print('Надо ввести положительное число')
 
 TRIES_FOR_CHECK = 10
 
 FIRST_ID = 1
+
 
 async def start_browser(p):
     while True:
@@ -88,13 +100,6 @@ async def lookup_pages(page, profile_link):
     return username, positive_rating, neutral_rating, negative_rating
 
 
-def create_tasks_for_check(batch, running_batch, pages_list):
-    profile_links = [f'https://teslacraft.org/members/.{batch + step}/card' for step in range(running_batch)]
-    tasks_lookup = [lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number])
-                    for profile_link_number in range(len(profile_links))]
-    return tasks_lookup
-
-
 def write_to_file_and_print(users_info):
     with open('users.txt', 'a', encoding='utf-8') as file:
         for user in users_info:
@@ -125,9 +130,10 @@ async def main():
                 number_of_attempts = 1
             else:
                 number_of_attempts += 1
-
-            tasks_lookup = create_tasks_for_check(batch=batch, running_batch=running_batch, pages_list=pages_list)
-            users_info = await asyncio.gather(*tasks_lookup)
+            profile_links = [f'https://teslacraft.org/members/.{batch + step}/card' for step in range(running_batch)]
+            users_info = await asyncio.gather(
+                *[lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number])
+                  for profile_link_number in range(len(profile_links))])
             write_to_file_and_print(users_info)
             print(time.time() - time_start)
     create_tops()
