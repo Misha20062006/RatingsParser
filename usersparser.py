@@ -47,7 +47,7 @@ while True:
     else:
         print('Надо ввести положительное число')
 
-TRIES_FOR_CHECK = 10
+TRIES_FOR_CHECK = 100
 
 FIRST_ID = 1
 
@@ -140,11 +140,11 @@ async def main():
             tasks = [lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number]) for profile_link_number in range(len(profile_links))]
             users_info = await asyncio.gather(*tasks)
             write_to_file_and_print(users_info)
-            print(time.time() - time_start)
+            print(f'Время проверки {WINDOWS_IN_BROWSER} страниц: {time.time() - time_start}')
     create_tops()
     print(f'Программа закончила работу')
-    print(f'Возможные ошибки указаны в файле "last_log.log" ')
-    print(f'Время выполнения: {time.time() - program_start}')
+    print(f'Все возникшие ошибки, если они были, указаны в файле "last_log.log" ')
+    print(f'Время выполнения всей программы: {time.time() - program_start}')
 
 
 if __name__ == "__main__":
