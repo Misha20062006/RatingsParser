@@ -4,6 +4,17 @@ import time
 from patchright.async_api import async_playwright
 from sortnames import create_tops
 from datetime import datetime
+import logging
+from datetime import datetime
+
+logging.basicConfig(
+    level=logging.ERROR,
+    filename='last_log.log',
+    filemode="w",
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    encoding='utf-8'
+)
+
 
 with open('users.txt', 'w', encoding='utf-8'):
     pass
@@ -58,8 +69,7 @@ async def start_browser(p):
         except Exception as e:
             await test_page.close()
             await context.close()
-            print('Ошибка:', e)
-            print(f'Не удалось открыть стартовую страницу. Скорее всего, не удалось пройти капчу. Перезапуск браузера.')
+            logging.exception(f'Не удалось открыть стартовую страницу. Скорее всего, не удалось пройти капчу. Перезапуск браузера. {e}')
             await asyncio.sleep(2)
     return context
 
@@ -76,10 +86,7 @@ async def lookup_pages(page, profile_link):
     try:
         await page.goto(profile_link, wait_until='domcontentloaded', timeout=1000000)
     except Exception as e:
-        with open("errors.txt", "a", encoding="utf-8") as f:
-            time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"[{time_now}] {e}\n")
-        print('Ошибка при переходе на страницу:', e)
+        logging.exception(f'Ошибка при переходе на страницу: {e}')
 
     username_element = await page.query_selector('.username')
     positive_rating_element = await page.query_selector(
@@ -94,8 +101,7 @@ async def lookup_pages(page, profile_link):
         neutral_rating = rating_text.split('/')[1].strip()
         negative_rating = await negative_rating_element.inner_text()
     except Exception as e:
-        print('Ошибка, ник не был найден:')
-        print(e)
+        logging.exception(f'Ошибка, ник не был найден: {e}')
         return None
     return username, positive_rating, neutral_rating, negative_rating
 
@@ -131,19 +137,19 @@ async def main():
             else:
                 number_of_attempts += 1
             profile_links = [f'https://teslacraft.org/members/.{batch + step}/card' for step in range(running_batch)]
-            users_info = await asyncio.gather(
-                *[lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number])
-                  for profile_link_number in range(len(profile_links))])
+            tasks = [lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number]) for profile_link_number in range(len(profile_links))]
+            users_info = await asyncio.gather(*tasks)
             write_to_file_and_print(users_info)
             print(time.time() - time_start)
     create_tops()
-    print(f'Программа закончила работу. Время выполнения всей программы: {time.time() - program_start}')
+    print(f'Программа закончила работу')
+    print(f'Возможные ошибки указаны в файле "last_log.log" ')
+    print(f'Время выполнения: {time.time() - program_start}')
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as ex:
-        print("Ошибка во время выполнения:")
-        print(ex)
+        logging.exception(f'Ошибка во время выполнения: {ex}')
     input("\nНажмите Enter, чтобы закрыть...")
