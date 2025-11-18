@@ -1,0 +1,143 @@
+import os
+import asyncio
+import time
+from patchright.async_api import async_playwright
+from sortnames import create_tops
+from datetime import datetime
+
+program_start = time.time()
+print('Программа пройдётся по айди пользователей от старых к новы (от 1 до Вашего числа) и соберёт статистику по рейтингам в файлы .txt')
+print('Введите количество пользователей форума для сбора статистики. Например: 100 (число должно быть больше 0)')
+
+while True:
+    USERS_COUNT = int(input('Количество пользователей: '))
+    if USERS_COUNT <=0:
+        print('Число должно быть больше 0')
+    else:
+        break
+
+print('Укажите количество страниц, которое будет задействовано одновременно при сборе статистики')
+print('Не рекомендуется указывать больше 20')
+while True:
+    WINDOWS_IN_BROWSER = int(input('Количество страниц для одновременной проверки: '))
+    if WINDOWS_IN_BROWSER <=0:
+        print('Число должно быть больше 0')
+    else:
+        break
+
+TRIES_FOR_CHECK = 10
+
+FIRST_ID = 1
+
+async def start_browser(p):
+    while True:
+        datadir = 'user-data'
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir=datadir,
+            headless=False,
+            channel="chrome"
+        )
+        test_page = await context.new_page()
+        await test_page.goto('https://teslacraft.org/donate/')
+        try:
+            await test_page.wait_for_selector('.rekt_titleContainer', timeout=15000)
+            await test_page.close()
+            break
+        except Exception as e:
+            await test_page.close()
+            await context.close()
+            print('Ошибка:', e)
+            print(f'Не удалось открыть стартовую страницу. Скорее всего, не удалось пройти капчу. Перезапуск браузера.')
+            await asyncio.sleep(2)
+    return context
+
+
+async def create_pages(context):
+    page = await context.new_page()
+    await page.route("**/*", lambda route, request: asyncio.create_task(
+        route.continue_() if request.resource_type == "document" else route.abort()
+    ))
+    return page
+
+
+async def lookup_pages(page, profile_link):
+    try:
+        await page.goto(profile_link, wait_until='domcontentloaded', timeout=1000000)
+    except Exception as e:
+        with open("errors.txt", "a", encoding="utf-8") as f:
+            time_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{time_now}] {e}\n")
+        print('Ошибка при переходе на страницу:', e)
+
+    username_element = await page.query_selector('.username')
+    positive_rating_element = await page.query_selector(
+        'div.userInfo > dl.userStats.pairsInline > dd:nth-child(8) > span:nth-child(1)')
+    rating_dd = await page.query_selector('div.userInfo > dl.userStats.pairsInline > dd:nth-child(8)')
+    negative_rating_element = await page.query_selector(
+        'div.userInfo > dl.userStats.pairsInline > dd:nth-child(8) > span:nth-child(2)')
+    try:
+        username = await username_element.inner_text()
+        positive_rating = await positive_rating_element.inner_text()
+        rating_text = await rating_dd.inner_text()
+        neutral_rating = rating_text.split('/')[1].strip()
+        negative_rating = await negative_rating_element.inner_text()
+    except Exception as e:
+        print('Ошибка, ник не был найден:')
+        print(e)
+        return None
+    return username, positive_rating, neutral_rating, negative_rating
+
+
+def create_tasks_for_check(batch, running_batch, pages_list):
+    profile_links = [f'https://teslacraft.org/members/.{batch + step}/card' for step in range(running_batch)]
+    tasks_lookup = [lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number])
+                    for profile_link_number in range(len(profile_links))]
+    return tasks_lookup
+
+
+def write_to_file_and_print(users_info):
+    with open('users.txt', 'a', encoding='utf-8') as file:
+        for user in users_info:
+            if user is None:
+                pass
+            else:
+                name = user[0]
+                positive_rating, neutral_rating, negative_rating = int(user[1].replace(' ', '').replace('+', '')), int(
+                    user[2].replace(' ', '')), int(user[3].replace(' ', ''))
+
+                print(name, positive_rating, neutral_rating, negative_rating)
+                file.write(f'{name} {positive_rating} {neutral_rating} {negative_rating}\n')
+
+
+async def main():
+    number_of_attempts = TRIES_FOR_CHECK
+    pages_list = []
+    async with async_playwright() as p:
+        context = await start_browser(p)
+        for batch in range(FIRST_ID, USERS_COUNT + 1, WINDOWS_IN_BROWSER):
+            time_start = time.time()
+            running_batch = min(WINDOWS_IN_BROWSER, USERS_COUNT - batch + 1)
+            if number_of_attempts == TRIES_FOR_CHECK:
+                if pages_list:
+                    for page in pages_list:
+                        await page.close()
+                pages_list = await asyncio.gather(*[create_pages(context=context) for _ in range(running_batch)])
+                number_of_attempts = 1
+            else:
+                number_of_attempts += 1
+
+            tasks_lookup = create_tasks_for_check(batch=batch, running_batch=running_batch, pages_list=pages_list)
+            users_info = await asyncio.gather(*tasks_lookup)
+            write_to_file_and_print(users_info)
+            print(time.time() - time_start)
+    create_tops()
+    print(f'Программа закончила работу. Время выполнения всей программы: {time.time() - program_start}')
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except Exception as ex:
+        print("Ошибка во время выполнения:")
+        print(ex)
+    input("\nНажмите Enter, чтобы закрыть...")
