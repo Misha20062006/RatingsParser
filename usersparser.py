@@ -85,23 +85,22 @@ async def create_pages(context):
 
 async def lookup_pages(page, profile_link):
     try:
-        await page.goto(profile_link, wait_until='domcontentloaded', timeout=1000000)
+        await page.goto(profile_link)
     except Exception as e:
         logging.exception(f'Ошибка при переходе на страницу: {e}')
         print('Ошибка при переходе на страницу (скорее всего, не удалось установить соединение, будет необходимо проверить файл last_log.log и вручную внести данные в конечные файлы)')
-
-    username_element = await page.query_selector('.username')
-    positive_rating_element = await page.query_selector(
+    username_element = page.locator('h3.username')
+    positive_rating_element = page.locator(
         'div.userInfo > dl.userStats.pairsInline > dd:nth-child(8) > span:nth-child(1)')
-    rating_dd = await page.query_selector('div.userInfo > dl.userStats.pairsInline > dd:nth-child(8)')
-    negative_rating_element = await page.query_selector(
+    rating_dd = page.locator('div.userInfo > dl.userStats.pairsInline > dd:nth-child(8)')
+    negative_rating_element = page.locator(
         'div.userInfo > dl.userStats.pairsInline > dd:nth-child(8) > span:nth-child(2)')
     try:
-        username = await username_element.inner_text()
-        positive_rating = await positive_rating_element.inner_text()
-        rating_text = await rating_dd.inner_text()
+        username = await username_element.inner_text(timeout=10)
+        positive_rating = await positive_rating_element.inner_text(timeout=10)
+        rating_text = await rating_dd.inner_text(timeout=10)
         neutral_rating = rating_text.split('/')[1].strip()
-        negative_rating = await negative_rating_element.inner_text()
+        negative_rating = await negative_rating_element.inner_text(timeout=10)
     except Exception as e:
         logging.exception(f'Ошибка, ник не был найден: {e}')
         print('Ошибка, ник не был найден (скорее всего, пользователь удалён).')
