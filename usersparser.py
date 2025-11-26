@@ -108,7 +108,7 @@ async def lookup_pages(page, profile_link):
     return username, positive_rating, neutral_rating, negative_rating
 
 
-def write_to_file_and_print(users_info):
+def write_and_print(users_info):
     with open('users.txt', 'a', encoding='utf-8') as file:
         for user in users_info:
             if user is None:
@@ -141,7 +141,7 @@ async def main():
             profile_links = [f'https://teslacraft.org/members/.{batch + step}/card' for step in range(running_batch)]
             tasks = [lookup_pages(page=pages_list[profile_link_number], profile_link=profile_links[profile_link_number]) for profile_link_number in range(len(profile_links))]
             users_info = await asyncio.gather(*tasks)
-            write_to_file_and_print(users_info)
+            write_and_print(users_info)
             print(f'Время проверки {WINDOWS_IN_BROWSER} страниц: {time.time() - time_start}')
     create_tops()
     print(f'Программа закончила работу.')
