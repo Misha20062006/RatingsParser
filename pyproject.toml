@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teslacraft-parser"
+version = "2.0.0"
+description = "Universal TeslaCraft public statistics parser with a Material desktop UI"
+readme = "README.md"
+requires-python = ">=3.12,<3.16"
+license = "MIT"
+authors = [{name = "Misha20062006"}]
+dependencies = [
+    "patchright>=1.56,<2",
+    "beautifulsoup4>=4.13,<5",
+    "flet[all]>=0.86.1,<0.87",
+    "flet-charts>=0.86.1,<0.87",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.21,<7",
+    "ruff>=0.15,<0.16",
+]
+
+[project.scripts]
+teslacraft-parser = "teslacraft_parser.cli:main"
+teslacraft-parser-gui = "teslacraft_parser.gui:run_gui"
+
+[tool.setuptools.packages.find]
+include = ["teslacraft_parser*"]
+
+[tool.ruff]
+line-length = 96
+target-version = "py312"
+exclude = ["build", "dist", "user-data", "results"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.flet]
+product = "TeslaCraft Parser"
+company = "Misha20062006"
+build_number = 2
+
+[tool.flet.app]
+path = "."
+module = "main.py"
+exclude = [
+    ".git",
+    ".github",
+    ".idea",
+    ".venv",
+    "build",
+    "dist",
+    "results",
+    "tests",
+    "user-data",
+]
+
+[tool.flet.windows]
+artifact = "TeslaCraftParser"

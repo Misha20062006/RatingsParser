@@ -1,11 +1,24 @@
-*.env
-*.venv
-*.idea/
+# Python
+.venv/
 __pycache__/
-*.txt
-user-data/
-build
-dist
-*.ico
-*.spec
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.flet/
+
+# IDE and local configuration
+.idea/
+.env
+
+# Runtime data and reports
 *.log
+*.jsonl
+*.txt
+!requirements.txt
+user-data/
+results/
+
+# Build artifacts
+build/
+dist/
