@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
 
-BASE_URL = "https://teslacraft.org"
+from .constants import BASE_URL
 
 
 def _text(node: Tag | None) -> str:
@@ -135,8 +135,30 @@ def parse_forum_sections_html(html: str, url: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
     seen: set[str] = set()
     for group in soup.select(".nodeList.sectionMain"):
-        category = _text(group.select_one("li.node.category.level_1 .nodeTitle a"))
-        for node in group.select("li.node.forum.level_2, li.node.link.level_2"):
+        category = ""
+        ordered_nodes = group.select(
+            ".node.category.level_1, "
+            "li.node.forum.level_2, li.node.link.level_2"
+        )
+        for node in ordered_nodes:
+            classes = set(node.get("class", []))
+            if "category" in classes:
+                category_info = node.find(class_="nodeInfo", recursive=False)
+                category_strip = node.find(class_="categoryStrip", recursive=False)
+                heading_root = category_info or category_strip or node
+                for selector in (
+                    ".nodeTitle a",
+                    ".nodeTitle",
+                    ".categoryText a",
+                    "h2 a",
+                    "h3 a",
+                ):
+                    candidate = heading_root.select_one(selector)
+                    if _text(candidate):
+                        category = _text(candidate)
+                        break
+                continue
+
             direct_info = node.find(class_="nodeInfo", recursive=False)
             title_link = (
                 direct_info.select_one(".nodeTitle a")

@@ -5,20 +5,26 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 .flet/
 
 # IDE and local configuration
 .idea/
+.vscode/
 .env
+gui-settings.json
+Thumbs.db
+Desktop.ini
+.DS_Store
 
 # Runtime data and reports
 *.log
-*.jsonl
-*.txt
-!requirements.txt
 user-data/
 results/
 
 # Build artifacts
 build/
 dist/
+/TeslaCraftParserGUI.spec

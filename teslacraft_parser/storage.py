@@ -11,9 +11,13 @@ class RecordStore(Protocol):
 
     def __contains__(self, key: object) -> bool: ...
 
+    def partition_pending(self, items: Iterable[Any]) -> tuple[list[Any], int]: ...
+
     def append(self, record: dict[str, Any]) -> bool: ...
 
     def append_many(self, records: Iterable[dict[str, Any]]) -> int: ...
+
+    def discard_many(self, keys: Iterable[Any]) -> int: ...
 
     def iter_records(self) -> Iterator[dict[str, Any]]: ...
 
@@ -43,6 +47,16 @@ class JsonlStore:
 
     def __contains__(self, key: object) -> bool:
         return str(key) in self._keys
+
+    def partition_pending(self, items: Iterable[Any]) -> tuple[list[Any], int]:
+        pending: list[Any] = []
+        skipped = 0
+        for item in items:
+            if str(item) in self._keys:
+                skipped += 1
+            else:
+                pending.append(item)
+        return pending, skipped
 
     def append(self, record: dict[str, Any]) -> bool:
         return self.append_many([record]) == 1
@@ -74,6 +88,19 @@ class JsonlStore:
             file.flush()
         self._keys.update(key for key, _ in pending)
         return len(pending)
+
+    def discard_many(self, keys: Iterable[Any]) -> int:
+        removed = {str(key) for key in keys} & self._keys
+        if not removed:
+            return 0
+        records = [
+            record
+            for record in self.iter_records()
+            if str(record.get(self.key_field)) not in removed
+        ]
+        write_jsonl(self.path, records)
+        self._keys.difference_update(removed)
+        return len(removed)
 
     def iter_records(self) -> Iterator[dict[str, Any]]:
         if not self.path.exists():

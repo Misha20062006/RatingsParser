@@ -266,20 +266,28 @@ class ParserDatabase:
                 )
         return counts
 
-    def iter_records(self, namespace: str) -> Iterator[dict[str, Any]]:
+    def iter_records(
+        self,
+        namespace: str,
+        *,
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        if limit is not None and limit < 0:
+            raise ValueError("limit cannot be negative")
+        query = """
+            SELECT payload_json FROM records
+            WHERE namespace = ?
+            ORDER BY record_key COLLATE NOCASE
+        """
+        parameters: tuple[Any, ...] = (namespace,)
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters = (namespace, limit)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM records
-                WHERE namespace = ?
-                ORDER BY record_key COLLATE NOCASE
-                """,
-                (namespace,),
-            ).fetchall()
-        for row in rows:
-            value = json.loads(str(row["payload_json"]))
-            if isinstance(value, dict):
-                yield value
+            for row in connection.execute(query, parameters):
+                value = json.loads(str(row["payload_json"]))
+                if isinstance(value, dict):
+                    yield value
 
     def record_count(self, namespace: str) -> int:
         with self._connect() as connection:
@@ -288,6 +296,28 @@ class ParserDatabase:
                 (namespace,),
             ).fetchone()
             return int(row["count"] if row else 0)
+
+    def record_keys(self, namespace: str) -> set[str]:
+        with self._connect() as connection:
+            return {
+                str(row["record_key"])
+                for row in connection.execute(
+                    "SELECT record_key FROM records WHERE namespace = ?",
+                    (namespace,),
+                )
+            }
+
+    def delete_records(self, namespace: str, record_keys: Iterable[Any]) -> int:
+        keys = list(dict.fromkeys(str(key) for key in record_keys))
+        if not keys:
+            return 0
+        with self._connect() as connection:
+            before = connection.total_changes
+            connection.executemany(
+                "DELETE FROM records WHERE namespace = ? AND record_key = ?",
+                ((namespace, key) for key in keys),
+            )
+            return connection.total_changes - before
 
     def namespaces(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -301,6 +331,22 @@ class ParserDatabase:
                 """
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def summary_counts(self) -> dict[str, int]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM records) AS records,
+                    (SELECT COUNT(DISTINCT namespace) FROM records) AS namespaces,
+                    (SELECT COUNT(*) FROM runs) AS runs,
+                    (SELECT COUNT(*) FROM snapshots) AS snapshots
+                """
+            ).fetchone()
+        return {
+            key: int(row[key] if row else 0)
+            for key in ("records", "namespaces", "runs", "snapshots")
+        }
 
     def list_runs(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -428,16 +474,25 @@ class ParserDatabase:
         return {"added": added, "removed": removed, "changed": changed}
 
     def export_csv(self, namespace: str, path: Path) -> int:
-        records = [_flatten_record(record) for record in self.iter_records(namespace)]
+        fieldnames: set[str] = set()
+        for record in self.iter_records(namespace):
+            fieldnames.update(_flatten_record(record))
         path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = sorted({key for record in records for key in record})
+        ordered_fields = sorted(fieldnames) or ["record"]
         temporary = path.with_name(path.name + ".tmp")
+        count = 0
         with temporary.open("w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames or ["record"])
+            writer = csv.DictWriter(
+                file,
+                fieldnames=ordered_fields,
+                extrasaction="ignore",
+            )
             writer.writeheader()
-            writer.writerows(records)
+            for record in self.iter_records(namespace):
+                writer.writerow(_flatten_record(record))
+                count += 1
         temporary.replace(path)
-        return len(records)
+        return count
 
     def import_jsonl(
         self,
@@ -449,8 +504,20 @@ class ParserDatabase:
     ) -> dict[str, int]:
         """Import a legacy JSONL file into the current-record table."""
 
+        totals = {"new": 0, "changed": 0, "unchanged": 0}
         prepared: list[tuple[str, dict[str, Any]]] = []
+        read = 0
         invalid = 0
+
+        def flush() -> None:
+            nonlocal prepared
+            if not prepared:
+                return
+            imported = self.upsert_many(namespace, prepared, run_id=run_id)
+            for key in totals:
+                totals[key] += int(imported[key])
+            prepared = []
+
         with path.open("r", encoding="utf-8-sig") as file:
             for line in file:
                 try:
@@ -462,10 +529,13 @@ class ParserDatabase:
                     invalid += 1
                     continue
                 prepared.append((str(record[key_field]), record))
-        result = self.upsert_many(namespace, prepared, run_id=run_id)
-        result["invalid"] = invalid
-        result["read"] = len(prepared)
-        return result
+                read += 1
+                if len(prepared) >= 1000:
+                    flush()
+        flush()
+        totals["invalid"] = invalid
+        totals["read"] = read
+        return totals
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._connect() as connection:
@@ -515,6 +585,19 @@ class SqliteStore:
             return False
         return self.database.contains(self.namespace, key)
 
+    def partition_pending(self, items: Iterable[Any]) -> tuple[list[Any], int]:
+        if self.refresh:
+            return list(items), 0
+        existing = self.database.record_keys(self.namespace)
+        pending: list[Any] = []
+        skipped = 0
+        for item in items:
+            if str(item) in existing:
+                skipped += 1
+            else:
+                pending.append(item)
+        return pending, skipped
+
     def append(self, record: dict[str, Any]) -> bool:
         return self.append_many([record]) == 1
 
@@ -532,6 +615,9 @@ class SqliteStore:
             run_id=self.run_id,
         )
         return len(prepared)
+
+    def discard_many(self, keys: Iterable[Any]) -> int:
+        return self.database.delete_records(self.namespace, keys)
 
     def iter_records(self) -> Iterator[dict[str, Any]]:
         return self.database.iter_records(self.namespace)

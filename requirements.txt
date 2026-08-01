@@ -1,6 +1,5 @@
 patchright>=1.56,<2
 beautifulsoup4>=4.13,<5
-flet[all]>=0.86.1,<0.87
-flet-charts>=0.86.1,<0.87
+flet[all]>=0.86.4,<0.87
 pyinstaller>=6.21,<7
 ruff>=0.15,<0.16

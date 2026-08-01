@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teslacraft-parser"
-version = "2.0.0"
+version = "2.0.1"
 description = "Universal TeslaCraft public statistics parser with a Material desktop UI"
 readme = "README.md"
 requires-python = ">=3.12,<3.16"
@@ -13,8 +13,7 @@ authors = [{name = "Misha20062006"}]
 dependencies = [
     "patchright>=1.56,<2",
     "beautifulsoup4>=4.13,<5",
-    "flet[all]>=0.86.1,<0.87",
-    "flet-charts>=0.86.1,<0.87",
+    "flet[all]>=0.86.4,<0.87",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +41,7 @@ ignore = ["E501"]
 [tool.flet]
 product = "TeslaCraft Parser"
 company = "Misha20062006"
-build_number = 2
+build_number = 3
 
 [tool.flet.app]
 path = "."

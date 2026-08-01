@@ -9,7 +9,10 @@ from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 from patchright.async_api import Locator, Page
 
-from .browser import BASE_URL, BrowserController
+from .browser import BrowserController
+from .constants import BASE_URL
+from .constants import DEFAULT_APPEALS_URL as DEFAULT_APPEALS_URL
+from .constants import DEFAULT_FORUM_URL as DEFAULT_FORUM_URL
 from .crawler import (
     CrawlControl,
     CrawlSummary,
@@ -30,8 +33,6 @@ from .storage import (
     write_text_lines,
 )
 
-DEFAULT_FORUM_URL = f"{BASE_URL}/forums/Флудильня.30/"
-DEFAULT_APPEALS_URL = f"{BASE_URL}/forums/Апелляции-на-наказания-консоли.81/"
 PUNISHMENT_PATHS = {
     "ban": "/banlist",
     "kick": "/banlist/kick",
@@ -44,6 +45,8 @@ PUNISHMENT_NAMES = {
     "mute": "муты",
     "warn": "предупреждения",
 }
+CLAN_INDEX_FORMAT = "clans-index-v3"
+CLAN_DETAIL_FORMAT = "clans-details-v3"
 
 
 def _open_store(
@@ -739,39 +742,101 @@ async def parse_clan_index(
         "(elements) => elements.map((element) => element.getAttribute('href'))"
     )
     links = sorted(
-        {urljoin(BASE_URL + "/", href) for href in hrefs if isinstance(href, str) and href}
+        {
+            absolute
+            for href in hrefs
+            if isinstance(href, str) and href
+            for absolute in [urljoin(BASE_URL + "/", href)]
+            if urlparse(absolute).path.rstrip("/").casefold() != "/clan"
+            and urlparse(absolute).path.casefold().startswith("/clan/")
+        }
     )
-    return {"page": page_number, "url": url, "clan_links": links}
+    if not links:
+        raise RuntimeError(
+            "Страница списка кланов не содержит ссылок. "
+            "Возможно, она не успела загрузиться; пустой результат не сохранён."
+        )
+    return {
+        "page": page_number,
+        "url": url,
+        "clan_links": links,
+        "_complete": CLAN_INDEX_FORMAT,
+    }
 
 
 async def parse_clan(page: Page, clan_url: str, url: str) -> dict[str, Any]:
     title = await _text_or_none(page.locator("h1, .titleBar h1"))
     rows = page.locator("#content table tbody tr")
     members: list[dict[str, Any]] = []
-    for index in range(await rows.count()):
+    row_count = await rows.count()
+    for index in range(row_count):
         row = rows.nth(index)
         cells = [value.strip() for value in await row.locator("td").all_inner_texts()]
         raw = (await row.inner_text()).strip()
-        if len(cells) >= 4:
-            username = cells[1]
-            score = _clean_integer(cells[3])
-        else:
-            tokens = raw.split()
-            username = tokens[1] if len(tokens) > 1 else None
-            score = _clean_integer(tokens[3]) if len(tokens) > 3 else None
-        if username:
+        rank = _clean_integer(cells[0]) if len(cells) >= 4 else None
+        username = cells[1] if len(cells) >= 4 else None
+        role = cells[2] if len(cells) >= 4 else None
+        score = _clean_integer(cells[3]) if len(cells) >= 4 else None
+        if rank is not None and username and score is not None:
             members.append(
                 {
+                    "rank": rank,
                     "username": username,
+                    "role": role,
                     "score": score,
                     "raw": raw,
                 }
             )
+    if not title:
+        raise RuntimeError(
+            "Карточка клана загрузилась без названия; неполная запись не сохранена."
+        )
+    if not members:
+        raise RuntimeError(
+            "Карточка клана не содержит распознанных участников; "
+            "неполная запись не сохранена."
+        )
     return {
         "url": clan_url,
         "title": title,
         "members": members,
+        "_complete": CLAN_DETAIL_FORMAT,
     }
+
+
+def _discard_incomplete_clan_records(
+    store: RecordStore,
+    *,
+    expected_format: str,
+) -> int:
+    """Remove legacy/partial clan rows so resume cannot mistake them for complete work."""
+
+    invalid: list[Any] = []
+    for record in store.iter_records():
+        key = record.get(store.key_field)
+        if key is None:
+            continue
+        if record.get("_complete") != expected_format:
+            invalid.append(key)
+            continue
+        if expected_format == CLAN_INDEX_FORMAT:
+            links = record.get("clan_links")
+            if not isinstance(links, list) or not links:
+                invalid.append(key)
+        else:
+            title = record.get("title")
+            members = record.get("members")
+            if (
+                not isinstance(title, str)
+                or not title.strip()
+                or not isinstance(members, list)
+                or not members
+            ):
+                invalid.append(key)
+    removed = store.discard_many(invalid)
+    if removed:
+        print(f"[clans] Повторно проверяем неполные старые записи: {removed}.")
+    return removed
 
 
 def write_clan_reports(output_dir: Path, store: RecordStore) -> None:
@@ -827,20 +892,26 @@ async def run_clans(
         refresh=refresh,
         run_id=run_id,
     )
-    index_summary = await crawl_items(
-        mode="clan-index",
-        controller=controller,
-        items=range(start_page, end_page + 1),
-        url_for=lambda page_number: f"{BASE_URL}/clan/?page={page_number}",
-        parse=parse_clan_index,
-        store=index_store,
-        error_path=output_dir / "clan_index_errors.jsonl",
-        concurrency=concurrency,
-        delay_seconds=delay_seconds,
-        control=control,
-        on_progress=on_progress,
+    _discard_incomplete_clan_records(
+        index_store,
+        expected_format=CLAN_INDEX_FORMAT,
     )
-    _export_store(index_store, index_path)
+    try:
+        index_summary = await crawl_items(
+            mode="clan-index",
+            controller=controller,
+            items=range(start_page, end_page + 1),
+            url_for=lambda page_number: f"{BASE_URL}/clan/?page={page_number}",
+            parse=parse_clan_index,
+            store=index_store,
+            error_path=output_dir / "clan_index_errors.jsonl",
+            concurrency=concurrency,
+            delay_seconds=delay_seconds,
+            control=control,
+            on_progress=on_progress,
+        )
+    finally:
+        _export_store(index_store, index_path)
 
     clan_links = sorted(
         {link for record in index_store.iter_records() for link in record.get("clan_links", [])}
@@ -861,20 +932,26 @@ async def run_clans(
         refresh=refresh,
         run_id=run_id,
     )
-    clan_summary = await crawl_items(
-        mode="clans",
-        controller=controller,
-        items=clan_links,
-        url_for=lambda clan_url: clan_url,
-        parse=parse_clan,
-        store=clan_store,
-        error_path=output_dir / "clans_errors.jsonl",
-        concurrency=concurrency,
-        delay_seconds=delay_seconds,
-        control=control,
-        on_progress=on_progress,
+    _discard_incomplete_clan_records(
+        clan_store,
+        expected_format=CLAN_DETAIL_FORMAT,
     )
-    _export_store(clan_store, clan_path)
+    try:
+        clan_summary = await crawl_items(
+            mode="clans",
+            controller=controller,
+            items=clan_links,
+            url_for=lambda clan_url: clan_url,
+            parse=parse_clan,
+            store=clan_store,
+            error_path=output_dir / "clans_errors.jsonl",
+            concurrency=concurrency,
+            delay_seconds=delay_seconds,
+            control=control,
+            on_progress=on_progress,
+        )
+    finally:
+        _export_store(clan_store, clan_path)
     write_clan_reports(output_dir, clan_store)
     _create_snapshot(database, clan_namespace, snapshot_name, run_id)
     return index_summary, clan_summary
@@ -897,7 +974,12 @@ async def parse_forum_sections(
     item: str,
     url: str,
 ) -> dict[str, Any]:
-    return parse_forum_sections_html(await page.content(), url)
+    record = parse_forum_sections_html(await page.content(), url)
+    if not record.get("sections"):
+        raise RuntimeError(
+            "Карта форума загрузилась без разделов; пустой результат не сохранён."
+        )
+    return record
 
 
 def write_forum_section_reports(
@@ -939,7 +1021,7 @@ async def run_forum_sections(
         namespace=namespace,
         jsonl_path=jsonl_path,
         key_field="url",
-        refresh=refresh,
+        refresh=True,
         run_id=run_id,
     )
     summary = await crawl_items(
@@ -959,6 +1041,91 @@ async def run_forum_sections(
     write_forum_section_reports(output_dir, store)
     _create_snapshot(database, namespace, snapshot_name, run_id)
     return summary
+
+
+async def parse_forum_probe(
+    page: Page,
+    section_id: int,
+    url: str,
+) -> dict[str, Any]:
+    title = await _text_or_none(page.locator("#content h1, h1"))
+    actual_url = page.url
+    path = urlparse(actual_url).path.rstrip("/").casefold()
+    normalized_title = (title or "").strip().casefold()
+    error_markers = (
+        "ошибка",
+        "страница не найдена",
+        "запрошенная страница не найдена",
+        "requested page could not be found",
+        "oops",
+    )
+    valid = (
+        path.startswith("/forums/")
+        and path != "/forums"
+        and bool(normalized_title)
+        and not any(marker in normalized_title for marker in error_markers)
+    )
+    return {
+        "id": section_id,
+        "requested_url": url,
+        "url": actual_url if valid else url,
+        "title": title,
+        "status": "ok" if valid else "missing",
+    }
+
+
+async def run_forum_discovery(
+    *,
+    controller: BrowserController,
+    output_dir: Path,
+    start_id: int,
+    end_id: int,
+    concurrency: int,
+    delay_seconds: float,
+    database: ParserDatabase | None = None,
+    refresh: bool = False,
+    run_id: int | None = None,
+    control: CrawlControl | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> tuple[CrawlSummary, list[str]]:
+    if start_id < 1 or end_id < start_id:
+        raise ValueError("Диапазон ID разделов форума указан неверно")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    namespace = "forum:discovery"
+    jsonl_path = output_dir / "forum_discovery.jsonl"
+    store = _open_store(
+        database=database,
+        namespace=namespace,
+        jsonl_path=jsonl_path,
+        key_field="id",
+        refresh=refresh,
+        run_id=run_id,
+    )
+    try:
+        summary = await crawl_items(
+            mode="forum-discovery",
+            controller=controller,
+            items=range(start_id, end_id + 1),
+            url_for=lambda section_id: f"{BASE_URL}/forums/{section_id}/",
+            parse=parse_forum_probe,
+            store=store,
+            error_path=output_dir / "forum_discovery_errors.jsonl",
+            concurrency=concurrency,
+            delay_seconds=delay_seconds,
+            control=control,
+            on_progress=on_progress,
+        )
+    finally:
+        _export_store(store, jsonl_path)
+    urls = sorted(
+        {
+            str(record["url"])
+            for record in store.iter_records()
+            if record.get("status") == "ok" and record.get("url")
+        }
+    )
+    write_text_lines(output_dir / "forum_discovered_sections.txt", urls)
+    return summary, urls
 
 
 async def parse_forum_index(

@@ -2,15 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from patchright.async_api import BrowserContext, Page, Playwright, async_playwright
 
-BASE_URL = "https://teslacraft.org"
-ACCESS_CHECK_URL = f"{BASE_URL}/donate/"
-SITE_READY_SELECTOR = ".rekt_titleContainer"
+from .constants import ACCESS_CHECK_URL
+
+ControlCheckpoint = Callable[[], Awaitable[None]]
+CHALLENGE_SELECTORS = (
+    "#challenge-running",
+    "#challenge-stage",
+    ".cf-challenge",
+    'iframe[src*="challenges.cloudflare.com"]',
+)
+CHALLENGE_TITLE_MARKERS = (
+    "just a moment",
+    "attention required",
+    "подождите",
+    "проверка безопасности",
+)
 
 
 class TeslaCraftAccessError(RuntimeError):
@@ -26,12 +40,14 @@ class BrowserController:
         captcha_timeout_seconds: float = 300,
         retries: int = 3,
         retry_delay_seconds: float = 1,
+        checkpoint: ControlCheckpoint | None = None,
     ) -> None:
         self.profile_dir = profile_dir.resolve()
         self.request_timeout_ms = int(request_timeout_seconds * 1000)
         self.captcha_timeout_seconds = captcha_timeout_seconds
         self.retries = retries
         self.retry_delay_seconds = retry_delay_seconds
+        self.checkpoint = checkpoint
         self._playwright: Playwright | None = None
         self.context: BrowserContext | None = None
         self._access_page: Page | None = None
@@ -90,6 +106,8 @@ class BrowserController:
         """
 
         async with self._access_lock:
+            if self.checkpoint is not None:
+                await self.checkpoint()
             if self.context is None:
                 raise RuntimeError("Браузер ещё не запущен")
 
@@ -108,8 +126,10 @@ class BrowserController:
             deadline = time.monotonic() + self.captcha_timeout_seconds
             notice_printed = False
             while time.monotonic() < deadline:
+                if self.checkpoint is not None:
+                    await self.checkpoint()
                 try:
-                    if await page.locator(SITE_READY_SELECTOR).count() > 0:
+                    if await self._site_page_ready(page):
                         print("Доступ к TeslaCraft подтверждён.")
                         return
                 except Exception:
@@ -128,6 +148,24 @@ class BrowserController:
                 "Проверьте окно Chrome, сеть и отсутствие VPN."
             )
 
+    @staticmethod
+    async def _site_page_ready(page: Page) -> bool:
+        """Accept normal TeslaCraft pages without relying on one layout selector."""
+
+        hostname = (urlparse(page.url).hostname or "").casefold()
+        if hostname not in {"teslacraft.org", "www.teslacraft.org"}:
+            return False
+        try:
+            title = (await page.title()).casefold()
+            if any(marker in title for marker in CHALLENGE_TITLE_MARKERS):
+                return False
+            for selector in CHALLENGE_SELECTORS:
+                if await page.locator(selector).count() > 0:
+                    return False
+            return await page.locator("body").count() > 0
+        except Exception:
+            return False
+
     async def new_worker_page(self) -> Page:
         if self.context is None:
             raise RuntimeError("Браузер ещё не запущен")
@@ -145,13 +183,15 @@ class BrowserController:
     async def navigate(self, page: Page, url: str) -> None:
         last_error: BaseException | None = None
         for attempt in range(1, self.retries + 1):
+            if self.checkpoint is not None:
+                await self.checkpoint()
             try:
                 await page.goto(
                     url,
                     wait_until="domcontentloaded",
                     timeout=self.request_timeout_ms,
                 )
-                if await page.locator(SITE_READY_SELECTOR).count() == 0:
+                if not await self._site_page_ready(page):
                     raise TeslaCraftAccessError(
                         "Вместо страницы TeslaCraft получена проверка Cloudflare"
                     )

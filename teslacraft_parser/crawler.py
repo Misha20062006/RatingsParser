@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ class CrawlControl:
         self._resume = asyncio.Event()
         self._resume.set()
         self._cancelled = False
+        self._cancel_signal = asyncio.Event()
 
     @property
     def paused(self) -> bool:
@@ -43,12 +45,21 @@ class CrawlControl:
 
     def cancel(self) -> None:
         self._cancelled = True
+        self._cancel_signal.set()
         self._resume.set()
 
     async def checkpoint(self) -> None:
         await self._resume.wait()
         if self._cancelled:
             raise CrawlCancelled("Остановлено пользователем")
+
+    async def wait(self, seconds: float) -> None:
+        """Wait between batches while allowing cancellation to interrupt the delay."""
+
+        if seconds > 0 and not self._cancelled:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._cancel_signal.wait(), timeout=seconds)
+        await self.checkpoint()
 
 
 @dataclass(slots=True)
@@ -110,12 +121,21 @@ async def crawl_items(
     if concurrency < 1:
         raise ValueError("concurrency должна быть не меньше 1")
 
-    all_items = list(items)
-    pending = [item for item in all_items if item not in store]
+    partition_pending = getattr(store, "partition_pending", None)
+    if callable(partition_pending):
+        pending, skipped = partition_pending(items)
+    else:
+        pending = []
+        skipped = 0
+        for item in items:
+            if item in store:
+                skipped += 1
+            else:
+                pending.append(item)
     summary = CrawlSummary(
         mode=mode,
         discovered=len(pending),
-        skipped=sum(1 for item in all_items if item in store),
+        skipped=skipped,
     )
     if not pending:
         message = f"[{mode}] Новых элементов нет."
@@ -149,6 +169,10 @@ async def crawl_items(
         try:
             await controller.navigate(page, url)
             return item, url, await parse(page, item, url), None
+        except CrawlCancelled:
+            # Cancellation is control flow, not a failed parsing result.  Let it
+            # abort the whole batch so no partly completed batch is committed.
+            raise
         except Exception as error:
             return item, url, None, error
 
@@ -157,9 +181,24 @@ async def crawl_items(
             if control is not None:
                 await control.checkpoint()
             batch = pending[offset : offset + len(pages)]
-            results = await asyncio.gather(
-                *[process(pages[index], item) for index, item in enumerate(batch)]
-            )
+            tasks = [
+                asyncio.create_task(process(pages[index], item))
+                for index, item in enumerate(batch)
+            ]
+            try:
+                results = await asyncio.gather(*tasks)
+            except CrawlCancelled:
+                # gather() does not cancel sibling tasks when one task raises.
+                # Stop and join every worker before closing its browser page.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+
+            # A stop request can arrive after the last browser checkpoint.  Do
+            # not persist that batch until we know cancellation was not raised.
+            if control is not None:
+                await control.checkpoint()
 
             completed_records: list[dict[str, Any]] = []
             for item, url, record, error in results:
@@ -206,7 +245,10 @@ async def crawl_items(
                     pages[index] = await controller.new_worker_page()
 
             if delay_seconds > 0 and processed < len(pending):
-                await asyncio.sleep(delay_seconds)
+                if control is None:
+                    await asyncio.sleep(delay_seconds)
+                else:
+                    await control.wait(delay_seconds)
     finally:
         for page in pages:
             if not page.is_closed():

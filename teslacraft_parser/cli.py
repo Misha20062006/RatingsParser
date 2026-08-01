@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from .browser import BrowserController
+from .constants import (
+    DEFAULT_APPEALS_URL,
+    DEFAULT_FORUM_SCAN_END_ID,
+    DEFAULT_FORUM_URL,
+)
 from .crawler import (
     CrawlCancelled,
     CrawlControl,
@@ -21,14 +26,13 @@ from .crawler import (
 )
 from .database import ParserDatabase
 from .modes import (
-    DEFAULT_APPEALS_URL,
-    DEFAULT_FORUM_URL,
     PUNISHMENT_PATHS,
     discover_latest_ban_id,
     discover_latest_member_id,
     run_bans,
     run_clans,
     run_forum,
+    run_forum_discovery,
     run_forum_sections,
     run_members,
     run_punishments,
@@ -174,6 +178,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     punishments.add_argument("--since", type=_iso_date, help="дата от YYYY-MM-DD")
     punishments.add_argument("--until", type=_iso_date, help="дата до YYYY-MM-DD")
     punishments.add_argument(
+        "--include-historical",
+        action="store_true",
+        help="дополнительно собрать исторический архив банов по ID",
+    )
+    punishments.add_argument(
+        "--historical-only",
+        action="store_true",
+        help="собрать только исторический архив банов",
+    )
+    punishments.add_argument("--historical-start-id", type=_positive_int, default=1)
+    punishments.add_argument("--historical-end-id", type=_positive_int)
+    punishments.add_argument(
         "--status",
         dest="statuses",
         action="append",
@@ -194,6 +210,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     forum.add_argument("--end-page", type=_positive_int)
     forum.add_argument("--index-only", action="store_true")
     forum.add_argument("--max-thread-pages", type=_positive_int)
+    forum.add_argument(
+        "--all-sections",
+        action="store_true",
+        help="найти существующие разделы перебором ID и обработать каждый",
+    )
+    forum.add_argument("--section-start-id", type=_positive_int, default=1)
+    forum.add_argument(
+        "--section-end-id",
+        type=_positive_int,
+        default=DEFAULT_FORUM_SCAN_END_ID,
+    )
     forum.add_argument(
         "--prefix",
         dest="prefix_filters",
@@ -406,14 +433,31 @@ def describe_plan(arguments: argparse.Namespace) -> list[str]:
         end = arguments.end_id or "авто"
         return [f"Исторические баны: ID {arguments.start_id}…{end}"]
     if mode == "punishments":
+        if arguments.historical_only:
+            end_id = arguments.historical_end_id or "последний"
+            return [
+                f"Исторический архив наказаний: ID "
+                f"{arguments.historical_start_id}…{end_id}"
+            ]
         types = arguments.punishment_types or ["all"]
         end = arguments.end_page or "последняя"
         detail = "индекс + карточки" if not arguments.index_only else "только индекс"
-        return [
+        plan = [
             f"Наказания {', '.join(types)}: страницы {arguments.start_page}…{end}, {detail}"
         ]
+        if arguments.include_historical:
+            end_id = arguments.historical_end_id or "последний"
+            plan.append(
+                f"Исторический архив: ID {arguments.historical_start_id}…{end_id}"
+            )
+        return plan
     if mode == "clans":
         return [f"Кланы: страницы {arguments.start_page}…{arguments.end_page or 'последняя'}"]
+    if mode == "forum" and arguments.all_sections:
+        return [
+            f"Все разделы форума: поиск ID "
+            f"{arguments.section_start_id}…{arguments.section_end_id}"
+        ]
     if mode in {"forum", "appeals"}:
         return [
             f"Форум: {arguments.forum_url}, страницы {arguments.start_page}…{arguments.end_page or 'последняя'}"
@@ -499,6 +543,7 @@ async def run_from_arguments(
             request_timeout_seconds=arguments.request_timeout,
             captcha_timeout_seconds=arguments.captcha_timeout,
             retries=arguments.retries,
+            checkpoint=control.checkpoint,
         ) as controller:
             common: dict[str, Any] = {
                 "controller": controller,
@@ -533,28 +578,42 @@ async def run_from_arguments(
                     )
                 )
             elif arguments.mode == "punishments":
-                requested = arguments.punishment_types or ["all"]
-                types = (
-                    list(PUNISHMENT_PATHS)
-                    if "all" in requested
-                    else list(dict.fromkeys(requested))
-                )
-                summaries.extend(
-                    await run_punishments(
-                        **common,
-                        output_root=output_dir,
-                        punishment_types=types,
-                        start_page=arguments.start_page,
-                        end_page=arguments.end_page,
-                        collect_details=not arguments.index_only,
-                        max_details=arguments.max_details,
-                        nick=arguments.nick,
-                        moderator=arguments.moderator,
-                        since=arguments.since,
-                        until=arguments.until,
-                        statuses=arguments.statuses,
+                if not arguments.historical_only:
+                    requested = arguments.punishment_types or ["all"]
+                    types = (
+                        list(PUNISHMENT_PATHS)
+                        if "all" in requested
+                        else list(dict.fromkeys(requested))
                     )
-                )
+                    summaries.extend(
+                        await run_punishments(
+                            **common,
+                            output_root=output_dir,
+                            punishment_types=types,
+                            start_page=arguments.start_page,
+                            end_page=arguments.end_page,
+                            collect_details=not arguments.index_only,
+                            max_details=arguments.max_details,
+                            nick=arguments.nick,
+                            moderator=arguments.moderator,
+                            since=arguments.since,
+                            until=arguments.until,
+                            statuses=arguments.statuses,
+                        )
+                    )
+                if arguments.include_historical or arguments.historical_only:
+                    historical_end = (
+                        arguments.historical_end_id
+                        or await discover_latest_ban_id(controller)
+                    )
+                    summaries.append(
+                        await run_bans(
+                            **common,
+                            output_dir=output_dir / "bans",
+                            start_id=arguments.historical_start_id,
+                            end_id=historical_end,
+                        )
+                    )
             elif arguments.mode == "clans":
                 pair = await run_clans(
                     **common,
@@ -566,30 +625,68 @@ async def run_from_arguments(
                 )
                 summaries.extend(summary for summary in pair if summary is not None)
             elif arguments.mode in {"forum", "appeals"}:
-                pair = await run_forum(
-                    **common,
-                    output_root=output_dir,
-                    forum_url=arguments.forum_url,
-                    start_page=arguments.start_page,
-                    end_page=(
-                        1
-                        if arguments.mode == "forum" and arguments.prefixes_only
-                        else arguments.end_page
-                    ),
-                    collect_usernames=(
-                        arguments.mode == "forum"
-                        and not arguments.index_only
-                        and not arguments.prefixes_only
-                    ),
-                    without_prefix=arguments.mode == "appeals" or arguments.without_prefix,
-                    prefix_filters=arguments.prefix_filters
-                    if arguments.mode == "forum"
-                    else None,
-                    max_thread_pages=arguments.max_thread_pages
-                    if arguments.mode == "forum"
-                    else None,
-                )
-                summaries.extend(summary for summary in pair if summary is not None)
+                forum_urls = [arguments.forum_url]
+                if arguments.mode == "forum":
+                    summaries.append(
+                        await run_forum_sections(
+                            controller=controller,
+                            output_dir=output_dir,
+                            database=database,
+                            refresh=True,
+                            run_id=run_id,
+                            snapshot_name=snapshot_name,
+                            control=control,
+                            on_progress=on_progress,
+                        )
+                    )
+                if arguments.mode == "forum" and arguments.all_sections:
+                    discovery_summary, forum_urls = await run_forum_discovery(
+                        controller=controller,
+                        output_dir=output_dir,
+                        start_id=arguments.section_start_id,
+                        end_id=arguments.section_end_id,
+                        concurrency=arguments.concurrency,
+                        delay_seconds=arguments.delay,
+                        database=database,
+                        refresh=arguments.refresh,
+                        run_id=run_id,
+                        control=control,
+                        on_progress=on_progress,
+                    )
+                    summaries.append(discovery_summary)
+
+                for forum_url in forum_urls:
+                    await control.checkpoint()
+                    pair = await run_forum(
+                        **common,
+                        output_root=output_dir,
+                        forum_url=forum_url,
+                        start_page=arguments.start_page,
+                        end_page=(
+                            1
+                            if arguments.mode == "forum" and arguments.prefixes_only
+                            else arguments.end_page
+                        ),
+                        collect_usernames=(
+                            arguments.mode == "forum"
+                            and not arguments.index_only
+                            and not arguments.prefixes_only
+                        ),
+                        without_prefix=(
+                            arguments.mode == "appeals" or arguments.without_prefix
+                        ),
+                        prefix_filters=(
+                            arguments.prefix_filters
+                            if arguments.mode == "forum"
+                            else None
+                        ),
+                        max_thread_pages=(
+                            arguments.max_thread_pages
+                            if arguments.mode == "forum"
+                            else None
+                        ),
+                    )
+                    summaries.extend(summary for summary in pair if summary is not None)
             elif arguments.mode == "sections":
                 summaries.append(
                     await run_forum_sections(
