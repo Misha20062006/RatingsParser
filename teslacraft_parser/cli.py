@@ -129,7 +129,7 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="TeslaCraftParser",
+        prog="TeslaParser",
         description=(
             "Универсальный сборщик открытой статистики форума TeslaCraft. "
             "Повторный запуск продолжает работу, --refresh обновляет данные."
@@ -304,7 +304,7 @@ def _ask_positive(prompt: str, default: int | None = None) -> str:
 
 def interactive_arguments() -> list[str]:
     print(
-        "\nTeslaCraft Parser\n"
+        "\nTeslaParser\n"
         "1. Пользователи: ники, даты регистрации и рейтинги\n"
         "2. Все наказания: баны, кики, муты, предупреждения\n"
         "3. Исторические баны по диапазону ID\n"

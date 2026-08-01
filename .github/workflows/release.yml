@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Validate tag and source version
+        shell: pwsh
+        run: |
+          $version = python -c "import teslacraft_parser; print(teslacraft_parser.__version__)"
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+              throw "Tag $env:GITHUB_REF_NAME does not match project version $version"
+          }
+          "PROJECT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Lint
+        run: ruff check teslacraft_parser tests main.py teslaparser.py usersparser.py scripts/windows_version_info.py
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build standalone applications
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+
+      - name: Verify artifacts and Windows metadata
+        shell: pwsh
+        run: |
+          $expected = $env:PROJECT_VERSION
+          $artifacts = @(
+              @{ Path = "dist\TeslaParserGUI.exe"; Original = "TeslaParserGUI.exe" },
+              @{ Path = "dist\TeslaParser.exe"; Original = "TeslaParser.exe" }
+          )
+          foreach ($artifact in $artifacts) {
+              if (-not (Test-Path -LiteralPath $artifact.Path)) {
+                  throw "Missing artifact: $($artifact.Path)"
+              }
+              $version = (Get-Item -LiteralPath $artifact.Path).VersionInfo
+              if ($version.ProductName -ne "TeslaParser") {
+                  throw "Unexpected product name in $($artifact.Path): $($version.ProductName)"
+              }
+              if ($version.ProductVersion -ne $expected) {
+                  throw "Unexpected product version in $($artifact.Path): $($version.ProductVersion)"
+              }
+              if ($version.FileVersion -ne "$expected.0") {
+                  throw "Unexpected file version in $($artifact.Path): $($version.FileVersion)"
+              }
+              if ($version.OriginalFilename -ne $artifact.Original) {
+                  throw "Unexpected original filename in $($artifact.Path): $($version.OriginalFilename)"
+              }
+          }
+          foreach ($legacy in @(
+              "dist\TeslaCraftParserGUI.exe",
+              "dist\TeslaCraftParser.exe"
+          )) {
+              if (Test-Path -LiteralPath $legacy) {
+                  throw "Legacy artifact must not be released: $legacy"
+              }
+          }
+
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          $paths = @("dist\TeslaParserGUI.exe", "dist\TeslaParser.exe")
+          $lines = Get-FileHash -Algorithm SHA256 -LiteralPath $paths | ForEach-Object {
+              "$($_.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_.Path))"
+          }
+          [IO.File]::WriteAllLines(
+              (Join-Path $PWD "dist\SHA256SUMS.txt"),
+              $lines,
+              [Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(
+              "dist\TeslaParserGUI.exe",
+              "dist\TeslaParser.exe",
+              "dist\SHA256SUMS.txt"
+          )
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $env:GITHUB_REF_NAME @assets --clobber
+          }
+          else {
+              gh release create $env:GITHUB_REF_NAME @assets `
+                  --verify-tag `
+                  --title "TeslaParser $env:GITHUB_REF_NAME" `
+                  --generate-notes
+          }

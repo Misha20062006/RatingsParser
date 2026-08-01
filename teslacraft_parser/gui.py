@@ -21,13 +21,16 @@ from .gui_state import (
     find_saved_results,
     import_saved_jsonl,
     load_gui_settings,
+    prepare_gui_storage,
     save_gui_settings,
 )
 
 if TYPE_CHECKING:
     from .crawler import CrawlControl, ProgressEvent
 
-APP_TITLE = "TeslaCraft Parser"
+APP_TITLE = "TeslaParser"
+APP_DATA_DIRECTORY = "TeslaParser"
+LEGACY_APP_DATA_DIRECTORIES = ("TeslaCraftParser",)
 WINDOW_ICON = "icon.ico"
 WINDOW_WIDTH = 1180
 WINDOW_HEIGHT = 760
@@ -216,8 +219,18 @@ def _default_gui_root() -> Path:
         return Path.cwd()
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
-        return Path(local_app_data) / "TeslaCraftParser"
-    return Path.home() / "TeslaCraftParser"
+        return Path(local_app_data) / APP_DATA_DIRECTORY
+    return Path.home() / APP_DATA_DIRECTORY
+
+
+def _legacy_gui_roots() -> list[Path]:
+    """Return read-only compatibility locations used by older releases."""
+
+    if not getattr(sys, "frozen", False):
+        return []
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    parent = Path(local_app_data) if local_app_data else Path.home()
+    return [parent / name for name in LEGACY_APP_DATA_DIRECTORIES]
 
 
 def _path_from_text(value: str, default: Path, *, base: Path | None = None) -> Path:
@@ -442,10 +455,20 @@ def _data_row_colors() -> dict[ft.ControlState, ft.ColorValue]:
     }
 
 
-class TeslaCraftApp:
+class TeslaParserApp:
     def __init__(self, page: ft.Page) -> None:
         self.page = page
-        self.data_root = _default_gui_root()
+        preferred_data_root = _default_gui_root()
+        legacy_data_roots = _legacy_gui_roots()
+        storage = (
+            prepare_gui_storage(preferred_data_root, legacy_data_roots)
+            if getattr(sys, "frozen", False)
+            else None
+        )
+        self.data_root = storage.active_root if storage is not None else preferred_data_root
+        self.legacy_data_roots = [
+            root for root in legacy_data_roots if root != self.data_root
+        ]
         self.default_output_dir = self.data_root / "results"
         self.default_profile_dir = self.data_root / "user-data"
         self.settings_path = self.data_root / "gui-settings.json"
@@ -460,6 +483,12 @@ class TeslaCraftApp:
         self.running = False
         self.selected_namespace: str | None = None
         self.log_lines: list[str] = []
+        if storage is not None and storage.migrated_from is not None:
+            self.log_lines.append(
+                f"Данные перенесены из {storage.migrated_from} в {self.data_root}."
+            )
+        if storage is not None and storage.warning:
+            self.log_lines.append(storage.warning)
         self._forum_url_value = DEFAULT_FORUM_URL
         self._forum_targets = {
             key: (title, url) for key, title, url in KNOWN_FORUM_SECTIONS
@@ -858,6 +887,14 @@ class TeslaCraftApp:
 
     def _load_settings(self) -> None:
         settings = load_gui_settings(self.settings_path)
+        legacy_settings_root: Path | None = None
+        if not settings:
+            for legacy_root in self.legacy_data_roots:
+                legacy_settings = load_gui_settings(legacy_root / "gui-settings.json")
+                if legacy_settings:
+                    settings = legacy_settings
+                    legacy_settings_root = legacy_root
+                    break
         try:
             if not settings and Path(self.database_path.value).is_file():
                 database = ParserDatabase(Path(self.database_path.value))
@@ -880,6 +917,12 @@ class TeslaCraftApp:
         for key, control in controls.items():
             if key in settings:
                 control.value = str(settings[key])
+        if "profile_dir" not in settings:
+            for legacy_root in self.legacy_data_roots:
+                legacy_profile = legacy_root / "user-data"
+                if legacy_profile.is_dir():
+                    self.profile_dir.value = str(legacy_profile.resolve())
+                    break
         self._forum_url_value = self.forum_url.value or DEFAULT_FORUM_URL
         theme = settings.get("theme")
         if theme in {"light", "dark", "system"}:
@@ -917,7 +960,12 @@ class TeslaCraftApp:
             self._storage_explicit = configured_output != self.default_output_dir.resolve()
 
         if not self._storage_explicit:
-            candidates = [configured_output, self.default_output_dir, Path.cwd() / "results"]
+            candidates = [
+                configured_output,
+                self.default_output_dir,
+                *(root / "results" for root in self.legacy_data_roots),
+                Path.cwd() / "results",
+            ]
             if getattr(sys, "frozen", False):
                 executable_dir = Path(sys.executable).resolve().parent
                 candidates.extend(
@@ -937,6 +985,12 @@ class TeslaCraftApp:
                 self._database_follows_output = True
                 with suppress(OSError):
                     save_gui_settings(self.settings_path, self._settings_payload())
+        if legacy_settings_root is not None:
+            # Keep existing databases and browser profiles in place, but copy the
+            # lightweight settings into the new application directory. Nothing in
+            # the legacy directory is deleted or overwritten.
+            with suppress(OSError):
+                save_gui_settings(self.settings_path, self._settings_payload())
 
     def _refresh_storage_view(self) -> None:
         self.selected_namespace = None
@@ -956,7 +1010,7 @@ class TeslaCraftApp:
         )
         try:
             selected = await self.file_picker.get_directory_path(
-                dialog_title="Выберите папку с результатами TeslaCraft Parser",
+                dialog_title="Выберите папку с результатами TeslaParser",
                 initial_directory=str(
                     current
                     if current.is_dir()
@@ -991,7 +1045,7 @@ class TeslaCraftApp:
         )
         try:
             files = await self.file_picker.pick_files(
-                dialog_title="Выберите базу TeslaCraft Parser",
+                dialog_title="Выберите базу TeslaParser",
                 initial_directory=str(
                     current.parent
                     if current.parent.is_dir()
@@ -2199,7 +2253,7 @@ async def app_main(page: ft.Page) -> None:
     if pyi_splash is not None and pyi_splash.is_alive():
         pyi_splash.close()
 
-    application = TeslaCraftApp(page)
+    application = TeslaParserApp(page)
     page.clean()
     application.mount()
     await asyncio.sleep(0)

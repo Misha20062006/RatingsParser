@@ -17,6 +17,13 @@ class SavedJsonl:
     key_field: str
 
 
+@dataclass(frozen=True)
+class GuiStoragePreparation:
+    active_root: Path
+    migrated_from: Path | None = None
+    warning: str | None = None
+
+
 def load_gui_settings(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -39,6 +46,115 @@ def save_gui_settings(path: Path, settings: dict[str, Any]) -> None:
     finally:
         with suppress(OSError):
             temporary.unlink(missing_ok=True)
+
+
+def _rebased_path(value: Any, old_root: Path, new_root: Path) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        path = Path(value).expanduser().resolve(strict=False)
+        relative = path.relative_to(old_root.resolve(strict=False))
+    except (OSError, ValueError):
+        return None
+    return new_root.resolve(strict=False) / relative
+
+
+def _rebase_gui_settings(
+    settings_path: Path,
+    old_root: Path,
+    new_root: Path,
+    *,
+    force: bool,
+) -> bool:
+    settings = load_gui_settings(settings_path)
+    if not settings:
+        return False
+    changed = False
+    for key in ("output_dir", "database_path", "profile_dir"):
+        candidate = _rebased_path(settings.get(key), old_root, new_root)
+        if candidate is None:
+            continue
+        original = Path(str(settings[key])).expanduser()
+        if force or (not original.exists() and candidate.exists()):
+            settings[key] = str(candidate)
+            changed = True
+    if changed:
+        save_gui_settings(settings_path, settings)
+    return changed
+
+
+def prepare_gui_storage(
+    preferred_root: Path,
+    legacy_roots: list[Path],
+) -> GuiStoragePreparation:
+    """Atomically adopt an older application directory when that is safe.
+
+    Existing non-empty directories are never merged. If an atomic rename fails,
+    the old directory remains active so databases and the Chrome profile stay usable.
+    """
+
+    preferred_root = preferred_root.resolve(strict=False)
+    legacy_roots = [root.resolve(strict=False) for root in legacy_roots]
+    legacy_root = next((root for root in legacy_roots if root.is_dir()), None)
+
+    if preferred_root.exists():
+        if not preferred_root.is_dir():
+            if legacy_root is not None:
+                return GuiStoragePreparation(
+                    legacy_root,
+                    warning=f"Новый путь данных занят файлом: {preferred_root}",
+                )
+            return GuiStoragePreparation(
+                preferred_root,
+                warning=f"Путь данных не является папкой: {preferred_root}",
+            )
+        try:
+            preferred_is_empty = next(preferred_root.iterdir(), None) is None
+        except OSError:
+            preferred_is_empty = False
+        if legacy_root is not None and preferred_is_empty:
+            try:
+                preferred_root.rmdir()
+            except OSError as error:
+                return GuiStoragePreparation(
+                    legacy_root,
+                    warning=f"Не удалось подготовить новую папку данных: {error}",
+                )
+        else:
+            for old_root in legacy_roots:
+                if old_root.exists():
+                    continue
+                with suppress(OSError):
+                    _rebase_gui_settings(
+                        preferred_root / "gui-settings.json",
+                        old_root,
+                        preferred_root,
+                        force=False,
+                    )
+            return GuiStoragePreparation(preferred_root)
+
+    if legacy_root is None:
+        return GuiStoragePreparation(preferred_root)
+
+    try:
+        legacy_root.rename(preferred_root)
+    except OSError as error:
+        return GuiStoragePreparation(
+            legacy_root,
+            warning=f"Не удалось перенести данные в {preferred_root}: {error}",
+        )
+
+    warning = None
+    try:
+        _rebase_gui_settings(
+            preferred_root / "gui-settings.json",
+            legacy_root,
+            preferred_root,
+            force=True,
+        )
+    except OSError as error:
+        warning = f"Данные перенесены, но пути в настройках обновятся позже: {error}"
+    return GuiStoragePreparation(preferred_root, migrated_from=legacy_root, warning=warning)
 
 
 def discover_saved_jsonl(output_dir: Path) -> list[SavedJsonl]:

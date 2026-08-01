@@ -65,14 +65,14 @@ try {
     try {
         $center.Alignment = [System.Drawing.StringAlignment]::Center
         $graphics.DrawString(
-            "TeslaCraft Parser",
+            "TeslaParser",
             $titleFont,
             $titleBrush,
             [System.Drawing.RectangleF]::new(0, 164, 640, 42),
             $center
         )
         $graphics.DrawString(
-            "Подготовка приложения",
+            "Starting application...",
             $subtitleFont,
             $subtitleBrush,
             [System.Drawing.RectangleF]::new(0, 211, 640, 30),
