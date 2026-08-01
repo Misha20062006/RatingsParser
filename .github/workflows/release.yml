@@ -22,22 +22,25 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 
       - name: Validate tag and source version
         shell: pwsh
         run: |
-          $version = python -c "import teslacraft_parser; print(teslacraft_parser.__version__)"
+          $version = .\.venv\Scripts\python.exe -c "import teslacraft_parser; print(teslacraft_parser.__version__)"
           if ("v$version" -ne $env:GITHUB_REF_NAME) {
               throw "Tag $env:GITHUB_REF_NAME does not match project version $version"
           }
           "PROJECT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Lint
-        run: ruff check teslacraft_parser tests main.py teslaparser.py usersparser.py scripts/windows_version_info.py
+        run: .\.venv\Scripts\ruff.exe check teslacraft_parser tests main.py teslaparser.py usersparser.py scripts/windows_version_info.py
 
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
       - name: Build standalone applications
         shell: pwsh
