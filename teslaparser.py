@@ -1,4 +1,4 @@
-"""Backward-compatible entry point; use teslaparser.py for new scripts."""
+"""Source entry point for the TeslaParser command-line interface."""
 
 from teslacraft_parser.cli import main
 

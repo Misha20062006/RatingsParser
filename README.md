@@ -1,17 +1,17 @@
-# TeslaCraft Parser
+# TeslaParser
 
 Программа собирает открытую статистику игроков, наказаний, кланов и форума
 [TeslaCraft](https://teslacraft.org) и показывает результаты в удобном
 настольном интерфейсе.
 
 Для повседневного использования команды и знание Python не нужны. Запускайте
-готовый файл `TeslaCraftParserGUI.exe`.
+готовый файл `TeslaParserGUI.exe`.
 
 ## Быстрый старт
 
 ### Если у вас уже есть готовая программа
 
-1. Откройте `TeslaCraftParserGUI.exe`.
+1. Откройте `TeslaParserGUI.exe`.
 2. Слева выберите **Сбор данных**.
 3. В поле **Что собрать** выберите нужный вариант.
 4. Прочитайте появившееся пояснение и при необходимости измените параметры.
@@ -115,9 +115,16 @@ py -3.12 -m venv .venv
 от предыдущей версии; выбранный вручную источник всегда имеет приоритет.
 
 При запуске готового `.exe` результаты по умолчанию находятся в
-`%LOCALAPPDATA%\TeslaCraftParser\results`. Точный путь всегда виден и меняется в
+`%LOCALAPPDATA%\TeslaParser\results`. Точный путь всегда виден и меняется в
 разделе **Настройки**. При запуске из исходного кода используется папка `results`
 в каталоге проекта.
+
+При первом запуске TeslaParser 2.1 прежняя папка
+`%LOCALAPPDATA%\TeslaCraftParser` переносится целиком в новый каталог, включая
+SQLite-базу, настройки и профиль Chrome. Перенос выполняется только когда это
+безопасно: две заполненные папки никогда не объединяются и не перезаписываются.
+Если Windows временно блокирует старый каталог, приложение продолжит работать
+с ним и повторит перенос при следующем запуске.
 
 Внутри папки результатов находятся:
 
@@ -169,7 +176,7 @@ SQLite-базу**.
 
 Это сообщение относится к старой папочной сборке, из которой EXE перенесли без
 папки `_internal`. Актуальный скрипт создаёт единый самостоятельный файл —
-удалите старую сборку и соберите `TeslaCraftParserGUI.exe` заново.
+удалите старую сборку и соберите `TeslaParserGUI.exe` заново.
 
 ### Сбор идёт слишком долго
 
@@ -211,7 +218,7 @@ SQLite-базу**.
 Полная справка:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py --help
+.\.venv\Scripts\tesla-parser.exe --help
 ```
 
 ### Игроки
@@ -219,47 +226,47 @@ SQLite-базу**.
 Последний ID можно не указывать:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py members
+.\.venv\Scripts\tesla-parser.exe members
 ```
 
 Явный диапазон и обновление сохранённых карточек:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py members --start-id 1 --end-id 150000
-.\.venv\Scripts\python.exe usersparser.py members --start-id 149000 --end-id 150000 --refresh
+.\.venv\Scripts\tesla-parser.exe members --start-id 1 --end-id 150000
+.\.venv\Scripts\tesla-parser.exe members --start-id 149000 --end-id 150000 --refresh
 ```
 
 ### Наказания
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py punishments --type ban --type mute --since 2026-01-01 --until 2026-07-31 --status "Активен"
+.\.venv\Scripts\tesla-parser.exe punishments --type ban --type mute --since 2026-01-01 --until 2026-07-31 --status "Активен"
 ```
 
 Поиск, который предоставляет сам сайт:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py punishments --nick "Toshka"
-.\.venv\Scripts\python.exe usersparser.py punishments --moderator "T-b" --index-only
+.\.venv\Scripts\tesla-parser.exe punishments --nick "Toshka"
+.\.venv\Scripts\tesla-parser.exe punishments --moderator "T-b" --index-only
 ```
 
 ### Кланы и форум
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py clans
-.\.venv\Scripts\python.exe usersparser.py sections
-.\.venv\Scripts\python.exe usersparser.py forum --forum-url "https://teslacraft.org/forums/Прочие-баги.44/"
+.\.venv\Scripts\tesla-parser.exe clans
+.\.venv\Scripts\tesla-parser.exe sections
+.\.venv\Scripts\tesla-parser.exe forum --forum-url "https://teslacraft.org/forums/Прочие-баги.44/"
 ```
 
 Префиксы считываются с выбранного раздела, а не зашиваются в программу:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py forum --forum-url "https://teslacraft.org/forums/Прочие-баги.44/" --prefix "Исправлено" --prefix "Не баг" --without-prefix --index-only
+.\.venv\Scripts\tesla-parser.exe forum --forum-url "https://teslacraft.org/forums/Прочие-баги.44/" --prefix "Исправлено" --prefix "Не баг" --without-prefix --index-only
 ```
 
 ### План без запуска Chrome
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py members --end-id 150000 --dry-run
+.\.venv\Scripts\tesla-parser.exe members --end-id 150000 --dry-run
 ```
 
 ## SQLite, снимки и CSV
@@ -277,27 +284,27 @@ SQLite-базу**.
 Создание снимка:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py members --snapshot
-.\.venv\Scripts\python.exe usersparser.py clans --snapshot weekly
+.\.venv\Scripts\tesla-parser.exe members --snapshot
+.\.venv\Scripts\tesla-parser.exe clans --snapshot weekly
 ```
 
 Список и сравнение снимков:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py snapshots
-.\.venv\Scripts\python.exe usersparser.py snapshots --compare 1 2 --json results\difference.json
+.\.venv\Scripts\tesla-parser.exe snapshots
+.\.venv\Scripts\tesla-parser.exe snapshots --compare 1 2 --json results\difference.json
 ```
 
 Экспорт CSV:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py export --namespace members --csv results\exports\members.csv
+.\.venv\Scripts\tesla-parser.exe export --namespace members --csv results\exports\members.csv
 ```
 
 Перенос старого JSONL:
 
 ```powershell
-.\.venv\Scripts\python.exe usersparser.py migrate --namespace members --jsonl results\old_members.jsonl --key-field id
+.\.venv\Scripts\tesla-parser.exe migrate --namespace members --jsonl results\old_members.jsonl --key-field id
 ```
 
 ## Устройство хранения и обработка ошибок
@@ -327,7 +334,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1 -GuiOnly
 
 Результат:
 
-- `dist\TeslaCraftParserGUI.exe` — готовый графический интерфейс, который можно
+- `dist\TeslaParserGUI.exe` — готовый графический интерфейс, который можно
   переносить и запускать без дополнительных папок.
 
 Скрипт использует один и тот же `assets\icon.ico` для файла EXE, кнопки
@@ -346,13 +353,13 @@ Windows, поэтому он стартует немного медленнее 
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
-Дополнительно появится `dist\TeslaCraftParser.exe` — консольный single-file
+Дополнительно появится `dist\TeslaParser.exe` — консольный single-file
 вариант.
 
 ### Только консольная версия
 
 ```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean UsersParser.spec
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean TeslaParser.spec
 ```
 
 ### Нативный Flutter bundle
@@ -372,12 +379,16 @@ Google Chrome.
 ## Проверки разработки
 
 ```powershell
-.\.venv\Scripts\ruff.exe check teslacraft_parser tests main.py usersparser.py
+.\.venv\Scripts\ruff.exe check teslacraft_parser tests main.py teslaparser.py usersparser.py scripts\windows_version_info.py
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 GitHub Actions выполняет эти проверки на Windows без обращения к TeslaCraft.
 Тестовая HTML-разметка находится в `tests\fixtures`.
+
+Тег вида `v2.1.0` запускает отдельную release-сборку: она повторяет проверки,
+собирает оба EXE, сверяет их Windows-метаданные и публикует файлы вместе с
+`SHA256SUMS.txt`. Версия тега обязана совпадать с версией в `pyproject.toml`.
 
 ## Рекомендуемая нагрузка
 

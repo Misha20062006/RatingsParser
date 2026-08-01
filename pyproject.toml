@@ -3,9 +3,9 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "teslacraft-parser"
-version = "2.0.1"
-description = "Universal TeslaCraft public statistics parser with a Material desktop UI"
+name = "tesla-parser"
+version = "2.1.0"
+description = "TeslaParser: universal TeslaCraft public statistics parser with a Material desktop UI"
 readme = "README.md"
 requires-python = ">=3.12,<3.16"
 license = "MIT"
@@ -23,8 +23,8 @@ dev = [
 ]
 
 [project.scripts]
-teslacraft-parser = "teslacraft_parser.cli:main"
-teslacraft-parser-gui = "teslacraft_parser.gui:run_gui"
+tesla-parser = "teslacraft_parser.cli:main"
+tesla-parser-gui = "teslacraft_parser.gui:run_gui"
 
 [tool.setuptools.packages.find]
 include = ["teslacraft_parser*"]
@@ -39,9 +39,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
 [tool.flet]
-product = "TeslaCraft Parser"
+product = "TeslaParser"
 company = "Misha20062006"
-build_number = 3
+build_number = 4
 
 [tool.flet.app]
 path = "."
@@ -59,4 +59,4 @@ exclude = [
 ]
 
 [tool.flet.windows]
-artifact = "TeslaCraftParser"
+artifact = "TeslaParser"

@@ -31,6 +31,7 @@ from teslacraft_parser.gui_state import (
     find_saved_results,
     import_saved_jsonl,
     load_gui_settings,
+    prepare_gui_storage,
     save_gui_settings,
 )
 from teslacraft_parser.html_parsers import (
@@ -694,7 +695,7 @@ class HelperTests(unittest.TestCase):
                 "_default_gui_root",
                 return_value=root,
             ):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
                 for render in (
                     app._show_runner,
                     app._show_overview,
@@ -764,7 +765,7 @@ class HelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch.object(gui_module, "_default_gui_root", return_value=root):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
             selected_output = root / "old-results"
             app.output_dir.value = str(selected_output)
             _, database_path, _ = app._normalise_storage_paths()
@@ -784,7 +785,7 @@ class HelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch.object(gui_module, "_default_gui_root", return_value=root):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
             custom_database = root / "database" / "custom.sqlite"
             app.database_path.value = str(custom_database)
             app._database_path_changed(type("Event", (), {"control": app.database_path})())
@@ -803,7 +804,7 @@ class HelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch.object(gui_module, "_default_gui_root", return_value=root):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
             custom_url = "https://teslacraft.org/forums/custom.1/"
             app.mode.value = "forum"
             app.forum_target.value = "__custom__"
@@ -834,8 +835,112 @@ class HelperTests(unittest.TestCase):
         ):
             self.assertEqual(
                 _default_gui_root(),
-                Path(directory) / "TeslaCraftParser",
+                Path(directory) / "TeslaParser",
             )
+
+    def test_gui_storage_atomically_adopts_legacy_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            legacy = parent / "TeslaCraftParser"
+            preferred = parent / "TeslaParser"
+            results = legacy / "results"
+            profile = legacy / "user-data"
+            results.mkdir(parents=True)
+            profile.mkdir()
+            (results / "teslacraft.db").write_bytes(b"database")
+            (profile / "cookie.bin").write_bytes(b"cookie")
+            save_gui_settings(
+                legacy / "gui-settings.json",
+                {
+                    "output_dir": str(results),
+                    "database_path": str(results / "teslacraft.db"),
+                    "profile_dir": str(profile),
+                    "storage_explicit": False,
+                },
+            )
+
+            prepared = prepare_gui_storage(preferred, [legacy])
+
+            self.assertEqual(prepared.active_root, preferred.resolve())
+            self.assertEqual(prepared.migrated_from, legacy.resolve())
+            self.assertFalse(legacy.exists())
+            self.assertEqual(
+                (preferred / "results" / "teslacraft.db").read_bytes(),
+                b"database",
+            )
+            self.assertEqual(
+                (preferred / "user-data" / "cookie.bin").read_bytes(),
+                b"cookie",
+            )
+            settings = load_gui_settings(preferred / "gui-settings.json")
+            self.assertEqual(settings["output_dir"], str(preferred.resolve() / "results"))
+            self.assertEqual(
+                settings["database_path"],
+                str(preferred.resolve() / "results" / "teslacraft.db"),
+            )
+            self.assertEqual(
+                settings["profile_dir"],
+                str(preferred.resolve() / "user-data"),
+            )
+
+    def test_gui_storage_does_not_rewrite_external_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            legacy = parent / "TeslaCraftParser"
+            preferred = parent / "TeslaParser"
+            external = parent / "external"
+            legacy.mkdir()
+            external.mkdir()
+            save_gui_settings(
+                legacy / "gui-settings.json",
+                {
+                    "output_dir": str(external),
+                    "database_path": str(external / "custom.sqlite"),
+                    "profile_dir": str(external / "chrome"),
+                },
+            )
+
+            prepare_gui_storage(preferred, [legacy])
+
+            settings = load_gui_settings(preferred / "gui-settings.json")
+            self.assertEqual(settings["output_dir"], str(external))
+            self.assertEqual(settings["database_path"], str(external / "custom.sqlite"))
+            self.assertEqual(settings["profile_dir"], str(external / "chrome"))
+
+    def test_gui_storage_never_merges_two_populated_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            legacy = parent / "TeslaCraftParser"
+            preferred = parent / "TeslaParser"
+            legacy.mkdir()
+            preferred.mkdir()
+            (legacy / "legacy.txt").write_text("legacy", encoding="utf-8")
+            (preferred / "current.txt").write_text("current", encoding="utf-8")
+
+            prepared = prepare_gui_storage(preferred, [legacy])
+
+            self.assertEqual(prepared.active_root, preferred.resolve())
+            self.assertTrue((legacy / "legacy.txt").is_file())
+            self.assertTrue((preferred / "current.txt").is_file())
+
+    def test_gui_storage_falls_back_when_atomic_rename_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            legacy = parent / "TeslaCraftParser"
+            preferred = parent / "TeslaParser"
+            legacy.mkdir()
+            (legacy / "sentinel.txt").write_text("safe", encoding="utf-8")
+
+            with patch.object(Path, "rename", side_effect=OSError("locked")):
+                prepared = prepare_gui_storage(preferred, [legacy])
+
+            self.assertEqual(prepared.active_root, legacy.resolve())
+            self.assertIn("locked", prepared.warning or "")
+            self.assertEqual(
+                (legacy / "sentinel.txt").read_text(encoding="utf-8"),
+                "safe",
+            )
+            self.assertFalse(preferred.exists())
 
     def test_packaged_gui_replaces_an_empty_legacy_default_with_saved_results(
         self,
@@ -853,7 +958,7 @@ class HelperTests(unittest.TestCase):
             default_results = app_data / "results"
             project_results = root / "project" / "results"
             executable = (
-                root / "project" / "dist" / "TeslaCraftParserGUI" / "TeslaCraftParserGUI.exe"
+                root / "project" / "dist" / "TeslaParserGUI" / "TeslaParserGUI.exe"
             )
             save_gui_settings(
                 app_data / "gui-settings.json",
@@ -864,6 +969,7 @@ class HelperTests(unittest.TestCase):
             )
             with (
                 patch.object(gui_module, "_default_gui_root", return_value=app_data),
+                patch.object(gui_module, "_legacy_gui_roots", return_value=[]),
                 patch.object(gui_module.sys, "frozen", True, create=True),
                 patch.object(gui_module.sys, "executable", str(executable)),
                 patch.object(
@@ -872,7 +978,7 @@ class HelperTests(unittest.TestCase):
                     return_value=project_results.resolve(),
                 ) as finder,
             ):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
 
             self.assertEqual(app.output_dir.value, str(project_results.resolve()))
             self.assertEqual(
@@ -909,7 +1015,7 @@ class HelperTests(unittest.TestCase):
                 patch.object(gui_module, "_default_gui_root", return_value=root),
                 patch.object(gui_module, "find_saved_results") as finder,
             ):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
             self.assertEqual(app.output_dir.value, str(chosen))
             finder.assert_not_called()
 
@@ -941,7 +1047,7 @@ class HelperTests(unittest.TestCase):
                 },
             )
             with patch.object(gui_module, "_default_gui_root", return_value=root):
-                app = gui_module.TeslaCraftApp(FakePage())
+                app = gui_module.TeslaParserApp(FakePage())
             app._auto_import_dirs = [auxiliary]
             merged = app._database_with_saved_data()
             self.assertEqual(merged.record_count("members"), 1)
